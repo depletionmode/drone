@@ -1,0 +1,322 @@
+#include <Adafruit_BNO08x.h>
+#include <sh2_err.h>
+#include <sh2_hal.h>
+#include <sh2_SensorValue.h>
+#include <sh2_util.h>
+#include <sh2.h>
+#include <shtp.h>
+
+#include "Servo.h"
+#include "Arduino_LED_Matrix.h"
+
+#include <Adafruit_BNO08x.h>
+#include <EEPROM.h>
+#include <AutoPID.h>
+
+#define SPI_PIN_CS  10
+#define SPI_PIN_INT 9
+#define SPI_PIN_RESET 8
+//#define SPI_PIN_MOSI   11
+//#define SPI_PIN_MISO   12
+//#define SPI_PIN_SCK    13
+
+#define DEBUG
+
+//#define CALLIBRATE_ON_START
+
+#define CONTROL_PIN_KILL          A0
+#define CONTROL_PIN_THROTTLE      A1
+#define CONTROL_PIN_PITCH         A2
+#define CONTROL_PIN_ROLL          A3
+#define CONTROL_PIN_YAW           A4
+#define CONTROL_PIN_CALLIBRATION  A5
+
+#define MOTOR_PIN_FR  3
+#define MOTOR_PIN_FL  4
+#define MOTOR_PIN_BR  6
+#define MOTOR_PIN_BL  7
+
+#define PID_MIN -20
+#define PID_MAX 20
+#define THROTTLE_MAX (180-PID_MAX)
+#define DEGREES_RANGE_MAX 30
+
+#define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
+#define GYRO_REPORT_INTERVAL 5000
+
+Servo br; // back right blue
+Servo fl; // front left green
+Servo bl; // back left yellow
+Servo fr; // front right orange
+
+bool armed;
+
+int yaw; // ch 4
+int pitch; // ch 2
+int roll;  // ch 1
+int throttle; // ch 3
+
+double yaw_error;
+double pitch_error;
+double roll_error;
+
+double yaw_out;
+double pitch_out;
+double roll_out;
+
+double yaw_in;
+double pitch_in;
+double roll_in;
+
+double yaw_sp;
+double pitch_sp;
+double roll_sp;
+
+AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 5, 3, 3);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 5, 3, 3);
+AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 5, 3, 3);
+
+struct euler_t {
+  float yaw;
+  float pitch;
+  float roll;
+} ypr;
+
+Adafruit_BNO08x  bno08x(SPI_PIN_RESET);
+sh2_SensorValue_t sensorValue;
+
+ArduinoLEDMatrix matrix;
+
+void setReports(sh2_SensorId_t reportType, long report_interval) {
+  if (!bno08x.enableReport(reportType, report_interval)) {
+    Serial.println("GYRO: Could not enable stabilized remote vector");
+  }
+}
+
+void setup() {
+  armed = false;
+
+  pinMode(CONTROL_PIN_KILL, INPUT_PULLUP);
+  pinMode(CONTROL_PIN_CALLIBRATION, INPUT_PULLUP);
+  pinMode(CONTROL_PIN_THROTTLE, INPUT_PULLUP);
+  pinMode(CONTROL_PIN_PITCH, INPUT_PULLUP);
+  pinMode(CONTROL_PIN_ROLL, INPUT_PULLUP);
+  pinMode(CONTROL_PIN_YAW, INPUT_PULLUP);  
+  
+  br.attach(MOTOR_PIN_BR, 1000, 2000);
+  fl.attach(MOTOR_PIN_FL, 1000, 2000);
+  bl.attach(MOTOR_PIN_BL, 1000, 2000);
+  fr.attach(MOTOR_PIN_FR, 1000, 2000);
+  br.write(0);
+  fl.write(0);
+  bl.write(0);
+  fr.write(0);
+
+  Serial.begin(115200);
+
+  matrix.begin();
+  matrix.clear();
+
+  Serial.println("Starting initialization of drone...");
+
+  pid_yaw.setTimeStep(1);
+  pid_pitch.setTimeStep(1);
+  pid_roll.setTimeStep(1);
+
+  if (!bno08x.begin_SPI(SPI_PIN_CS, SPI_PIN_INT)) {
+    Serial.println("GYRO: Failed to find BNO08x chip");
+    while (1) { delay(100); }
+  }
+  setReports(GYRO_REPORT_TYPE, GYRO_REPORT_INTERVAL);
+
+#ifdef CALLIBRATE_ON_START
+  callibrate();
+#endif
+
+    do {
+      readGyro(&ypr, false);
+    } while (ypr.yaw == 0 && ypr.pitch == 0 && ypr.roll == 0);
+
+    yaw_error = 0;
+    pitch_error = 0;
+    roll_error = 0;
+
+    EEPROM.get(0, yaw_error);
+    EEPROM.get(8, pitch_error);
+    EEPROM.get(16, roll_error);
+
+    Serial.println("Callibration values:");
+    Serial.print(yaw_error);
+    Serial.print("\t");
+    Serial.print(pitch_error);
+    Serial.print("\t");
+    Serial.print(roll_error);
+    Serial.print("\n");
+
+    Serial.println("Initial gyro values:");
+    Serial.println("Yaw\tPitch\tRoll");
+    Serial.print(ypr.yaw - yaw_error);
+    Serial.print("\t");
+    Serial.print(ypr.pitch - pitch_error);
+    Serial.print("\t");
+    Serial.print(ypr.roll - roll_error);
+    Serial.print("\n");
+
+  Serial.println("Initialization complete.");
+}
+
+void loop() {
+  readGyro(&ypr, true);
+  int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
+
+  if (kill < 1500) {
+    armed = false;
+
+    br.write(0);
+    fl.write(0);
+    bl.write(0);
+    fr.write(0);
+  }
+
+  throttle = getValue(CONTROL_PIN_THROTTLE, 0, THROTTLE_MAX);
+  pitch = getValue(CONTROL_PIN_PITCH, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+  yaw = getValue(CONTROL_PIN_YAW, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+  roll = getValue(CONTROL_PIN_ROLL, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+
+  if (!armed && throttle < 10){
+    if (pulseIn(CONTROL_PIN_CALLIBRATION, HIGH) > 1500)
+    {
+      callibrate();
+    }
+
+    matrix.loadFrame(LEDMATRIX_EMOJI_HAPPY);
+
+    armed = true;
+  }
+
+  if (!armed) {
+    matrix.clear();
+
+    pid_yaw.stop(); pid_yaw.reset();
+    pid_pitch.stop(); pid_pitch.reset();
+    pid_roll.stop(); pid_roll.reset();
+
+    return;
+  }
+
+  readGyro(&ypr, true);
+
+  yaw_in = ypr.yaw;
+  pitch_in = ypr.pitch;
+  roll_in = ypr.roll;
+
+  yaw_sp = yaw;
+  pitch_sp = pitch;
+  roll_sp = roll;
+
+  pid_yaw.run();
+  pid_pitch.run();
+  pid_roll.run();
+
+  // TODO For now disable yaw!!
+  yaw_out = 0;
+
+  br.write(throttle - pitch_out - roll_out + yaw_out);
+  fl.write(throttle + pitch_out + roll_out + yaw_out);
+  bl.write(throttle - pitch_out + roll_out - yaw_out);
+  fr.write(throttle + pitch_out - roll_out - yaw_out);
+}
+
+int getValue(int pin, int min, int max) {
+  int value = pulseIn(pin, HIGH);
+  value = map(value, 1000, 2000, min, max);
+  value = constrain(value, min, max);
+  return value;
+}
+
+void callibrate() {
+  //
+  // Must make sure the drone is level before running the callibration.
+  //
+
+#define CALIBRATION_SAMPLES 250
+
+  Serial.println("Callibrating...");
+
+  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+    readGyro(&ypr, false);
+
+    yaw_error += ypr.yaw;
+    pitch_error += ypr.pitch;
+    roll_error += ypr.roll;
+
+    delay(2); // with 250 samples, this will take 500ms
+  }
+
+  yaw_error /= CALIBRATION_SAMPLES;
+  pitch_error /= CALIBRATION_SAMPLES;
+  roll_error /= CALIBRATION_SAMPLES;
+
+  EEPROM.put(0, yaw_error);
+  EEPROM.put(8, pitch_error);
+  EEPROM.put(16, roll_error);
+
+  Serial.print("Callibration values: ");
+  Serial.print(yaw_error);
+  Serial.print("\t");
+  Serial.print(pitch_error);
+  Serial.print("\t");
+  Serial.print(roll_error);
+  Serial.print("\n");
+}
+
+void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, bool degrees = false) {
+
+    float sqr = sq(qr);
+    float sqi = sq(qi);
+    float sqj = sq(qj);
+    float sqk = sq(qk);
+
+    ypr->yaw = atan2(2.0 * (qi * qj + qk * qr), (sqi - sqj - sqk + sqr));
+    ypr->pitch = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
+    ypr->roll = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
+
+    if (degrees) {
+      ypr->yaw *= RAD_TO_DEG;
+      ypr->pitch *= RAD_TO_DEG;
+      ypr->roll *= RAD_TO_DEG;
+    }
+}
+
+void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, euler_t* ypr, bool degrees = false) {
+    quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, ypr, degrees);
+}
+
+void readGyro(euler_t* ypr, bool adjustForError) {
+  if (bno08x.wasReset()) {
+    Serial.println("GYRO: Sensor was reset");
+    setReports(GYRO_REPORT_TYPE, GYRO_REPORT_INTERVAL);
+  }
+
+  if (bno08x.getSensorEvent(&sensorValue)) {
+    quaternionToEulerRV(&sensorValue.un.arvrStabilizedRV, ypr, true);
+
+    if (adjustForError) {
+      ypr->yaw = ypr->yaw - yaw_error;
+      ypr->pitch = ypr->pitch - pitch_error;
+      ypr->roll = ypr->roll - roll_error;
+    }
+
+  #ifdef DEBUG
+    Serial.print("GYRO: ");
+    Serial.print(adjustForError ? "Adjusted" : "Raw");
+    Serial.print("\t");
+    Serial.print(ypr->yaw);
+    Serial.print("\t");
+    Serial.print(ypr->pitch);
+    Serial.print("\t");
+    Serial.print(ypr->roll);
+    Serial.print("\n");
+  #endif
+  }
+}
