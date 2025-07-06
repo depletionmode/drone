@@ -53,13 +53,15 @@
 
 #define CONTROL_VALUE_MIN 940
 #define CONTROL_VALUE_MAX 1880
-#define CONTROL_UPDATE_INTERVAL 2 // every Nth loop
+#define CONTROL_VALUE_NORMALIZATION_FACTOR (1000.0/CONTROL_VALUE_MIN)
+#define CONTROL_UPDATE_INTERVAL 5 // every Nth loop
 
 #define PID_UPDATE_INTERVAL 2  //ms (should be lower than the gyro report interval to avoid PID lag)
-#define PID_MIN -90
-#define PID_MAX 90
-#define THROTTLE_MAX 180
-#define DEGREES_RANGE_MAX 30
+#define PID_MIN -500
+#define PID_MAX 500
+#define THROTTLE_MIN 1000
+#define THROTTLE_MAX 2000
+#define DEGREES_RANGE_MAX 3
 
 #define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
 #define GYRO_REPORT_INTERVAL 5000 //us
@@ -75,6 +77,9 @@ Servo bl;
 Servo fr;
 
 bool armed;
+
+unsigned long lastMicros = 0;
+unsigned long loopCount = 0;
 
 int yaw; // ch 4
 int pitch; // ch 2
@@ -98,7 +103,7 @@ double pitch_sp;
 double roll_sp;
 
 AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 0, 0, 0);
-AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 1.5, 0, 3);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 30, 0.003, 0.03);
 AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0, 0, 0);
 
 struct euler_t {
@@ -195,12 +200,16 @@ void setup() {
 }
 
 void loop() {
-  static int i = 0;
-
 #ifdef DEBUG
-  //Serial.print("Loop iteration: ");
-  //Serial.println(i);
+  unsigned long currentMicros = micros();
+  if (currentMicros - lastMicros >= 1000000) {
+    Serial.print("Loop frequency: ");
+    Serial.print(loopCount);
+    Serial.println(" Hz");
 
+    loopCount = 0;
+    lastMicros = currentMicros;
+  }
   //handleWebServer();
 #endif
 
@@ -220,7 +229,7 @@ void loop() {
   return;
 #endif
 
-  int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
+  int kill = getValue(CONTROL_PIN_KILL, false, THROTTLE_MIN, THROTTLE_MAX);
 
   if (kill < 1700) {
     armed = false;
@@ -231,16 +240,16 @@ void loop() {
     fr.write(0);
   }
 
-  if (i++ % CONTROL_UPDATE_INTERVAL == 0) {
+  if (loopCount++ % CONTROL_UPDATE_INTERVAL == 0) {
     //
     // As reading the control pins is slow, we only do it every Nth iteration
     // to avoid lagging the control loop (and impacting the PID loop).
     //
 
-    throttle = getValue(CONTROL_PIN_THROTTLE, 0, THROTTLE_MAX);
-    pitch = getValue(CONTROL_PIN_PITCH, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
-    yaw = getValue(CONTROL_PIN_YAW, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
-    roll = getValue(CONTROL_PIN_ROLL, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+    throttle = getValue(CONTROL_PIN_THROTTLE);
+    pitch = getValue(CONTROL_PIN_PITCH, true, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+    yaw = getValue(CONTROL_PIN_YAW, true, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+    roll = getValue(CONTROL_PIN_ROLL, true, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
 
 #ifdef DEBUG
     Serial.print("Control values: ");
@@ -257,9 +266,8 @@ void loop() {
 #endif
   }
 
-  if (!armed && throttle < 10 && kill > 1700){
-    if (pulseIn(CONTROL_PIN_CALLIBRATION, HIGH) > 1500)
-    {
+  if (!armed && throttle < 1040 && kill > 1700){
+    if (getValue(CONTROL_PIN_CALLIBRATION) > 1700) {
       callibrate();
     }
 
@@ -295,13 +303,10 @@ void loop() {
 
   runPids();
 
-  // TODO For now disable yaw!!
-  yaw_out = 0;
-
-  br.write(limitValue(throttle - pitch_out - roll_out - yaw_out, 0, THROTTLE_MAX));
-  fl.write(limitValue(throttle + pitch_out + roll_out - yaw_out, 0, THROTTLE_MAX));
-  bl.write(limitValue(throttle - pitch_out + roll_out + yaw_out, 0, THROTTLE_MAX));
-  fr.write(limitValue(throttle + pitch_out - roll_out + yaw_out, 0, THROTTLE_MAX));
+  br.writeMicroseconds(constrain(throttle - pitch_out - roll_out - yaw_out, 0, THROTTLE_MAX));
+  fl.writeMicroseconds(constrain(throttle + pitch_out + roll_out - yaw_out, 0, THROTTLE_MAX));
+  bl.writeMicroseconds(constrain(throttle - pitch_out + roll_out + yaw_out, 0, THROTTLE_MAX));
+  fr.writeMicroseconds(constrain(throttle + pitch_out - roll_out + yaw_out, 0, THROTTLE_MAX));
 }
 
 void runPids() {
@@ -320,20 +325,20 @@ void runPids() {
 #endif
 }
 
-int getValue(int pin, int min, int max) {
-  int value = pulseIn(pin, HIGH);
-  //Serial.println(value);
-  value = map(value, CONTROL_VALUE_MIN, CONTROL_VALUE_MAX, min, max);
-  value = constrain(value, min, max);
-  return value;
+int getValue(int pin) {
+  return getValue(pin, false, THROTTLE_MIN, THROTTLE_MAX);
 }
 
-int limitValue(int value, int min, int max) {
-  if (value < min) {
-    return min;
-  } else if (value > max) {
-    return max;
+int getValue(int pin, bool doMap, int min, int max) {
+  int value = pulseIn(pin, HIGH, 500000); // 500ms timeout
+  //Serial.println(value);
+  value *= CONTROL_VALUE_NORMALIZATION_FACTOR;
+  if (doMap) {
+    value = map(value, CONTROL_VALUE_MIN, CONTROL_VALUE_MAX, min, max);
+  } else {
+    value = constrain(value, min, max);
   }
+
   return value;
 }
 
@@ -356,9 +361,9 @@ void callibrate() {
     delay(2); // with 250 samples, this will take 500ms
   }
 
-  yaw_error /= CALIBRATION_SAMPLES;
-  pitch_error /= CALIBRATION_SAMPLES;
-  roll_error /= CALIBRATION_SAMPLES;
+  yaw_error /= (double)CALIBRATION_SAMPLES;
+  pitch_error /= (double)CALIBRATION_SAMPLES;
+  roll_error /= (double)CALIBRATION_SAMPLES;
 
   EEPROM.put(0, yaw_error);
   EEPROM.put(8, pitch_error);
