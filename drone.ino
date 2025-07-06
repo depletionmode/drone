@@ -46,15 +46,19 @@
 #define CONTROL_PIN_YAW           A4
 #define CONTROL_PIN_CALLIBRATION  A5
 
-#define MOTOR_PIN_FR  2
-#define MOTOR_PIN_FL  3
-#define MOTOR_PIN_BR  5
-#define MOTOR_PIN_BL  4
+#define MOTOR_PIN_FR  3
+#define MOTOR_PIN_FL  2
+#define MOTOR_PIN_BR  4
+#define MOTOR_PIN_BL  5
+
+#define CONTROL_VALUE_MIN 940
+#define CONTROL_VALUE_MAX 1880
+#define CONTROL_UPDATE_INTERVAL 2 // every Nth loop
 
 #define PID_UPDATE_INTERVAL 2  //ms (should be lower than the gyro report interval to avoid PID lag)
-#define PID_MIN -20
-#define PID_MAX 20
-#define THROTTLE_MAX (180-PID_MAX)
+#define PID_MIN -90
+#define PID_MAX 90
+#define THROTTLE_MAX 180
 #define DEGREES_RANGE_MAX 30
 
 #define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
@@ -65,10 +69,10 @@
 int status = WL_IDLE_STATUS;
 WiFiServer server(80);
 
-Servo br; // back right blue
-Servo fl; // front left green
-Servo bl; // back left yellow
-Servo fr; // front right orange
+Servo br;
+Servo fl;
+Servo bl;
+Servo fr;
 
 bool armed;
 
@@ -93,9 +97,9 @@ double yaw_sp;
 double pitch_sp;
 double roll_sp;
 
-AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 5, 3, 3);
-AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 3, 1, 0.5);
-AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 5, 3, 3);
+AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 0, 0, 0);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 0.9, 0, 13);
+AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0.9, 0, 13);
 
 struct euler_t {
   float yaw;
@@ -184,18 +188,23 @@ void setup() {
     Serial.print("\n");
 
   #ifdef DEBUG
-    startWifi();
+    //startWifi();
   #endif
 
   Serial.println("Initialization complete.");
 }
 
 void loop() {
-#ifdef DEBUG_GYRO_LOOP
   static int i = 0;
-  Serial.print("Loop iteration: ");
-  Serial.println(++i);
 
+#ifdef DEBUG
+  //Serial.print("Loop iteration: ");
+  //Serial.println(i);
+
+  //handleWebServer();
+#endif
+
+#ifdef DEBUG_GYRO_LOOP
   readGyro(&ypr, true);
 
   yaw_in = ypr.yaw;
@@ -211,13 +220,9 @@ void loop() {
   return;
 #endif
 
-#ifdef DEBUG
-  handleWebServer();
-#endif
-
   int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
 
-  if (kill < 1500) {
+  if (kill < 1700) {
     armed = false;
 
     br.write(0);
@@ -226,12 +231,33 @@ void loop() {
     fr.write(0);
   }
 
-  throttle = getValue(CONTROL_PIN_THROTTLE, 0, THROTTLE_MAX);
-  pitch = getValue(CONTROL_PIN_PITCH, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
-  yaw = getValue(CONTROL_PIN_YAW, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
-  roll = getValue(CONTROL_PIN_ROLL, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+  if (i++ % CONTROL_UPDATE_INTERVAL == 0) {
+    //
+    // As reading the control pins is slow, we only do it every Nth iteration
+    // to avoid lagging the control loop (and impacting the PID loop).
+    //
 
-  if (!armed && throttle < 10){
+    throttle = getValue(CONTROL_PIN_THROTTLE, 0, THROTTLE_MAX);
+    pitch = getValue(CONTROL_PIN_PITCH, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+    yaw = getValue(CONTROL_PIN_YAW, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+    roll = getValue(CONTROL_PIN_ROLL, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
+
+#ifdef DEBUG
+    Serial.print("Control values: ");
+    Serial.print(kill);
+    Serial.print("\t");
+    Serial.print(throttle);
+    Serial.print("\t");
+    Serial.print(pitch);
+    Serial.print("\t");
+    Serial.print(yaw);
+    Serial.print("\t");
+    Serial.print(roll);
+    Serial.print("\n");
+#endif
+  }
+
+  if (!armed && throttle < 10 && kill > 1700){
     if (pulseIn(CONTROL_PIN_CALLIBRATION, HIGH) > 1500)
     {
       callibrate();
@@ -243,6 +269,11 @@ void loop() {
   }
 
   if (!armed) {
+    br.write(0);
+    fl.write(0);
+    bl.write(0);
+    fr.write(0);
+
     matrix.clear();
 
     pid_yaw.stop(); pid_yaw.reset();
@@ -267,10 +298,10 @@ void loop() {
   // TODO For now disable yaw!!
   yaw_out = 0;
 
-  br.write(throttle - pitch_out - roll_out + yaw_out);
-  fl.write(throttle + pitch_out + roll_out + yaw_out);
-  bl.write(throttle - pitch_out + roll_out - yaw_out);
-  fr.write(throttle + pitch_out - roll_out - yaw_out);
+  br.write(throttle - pitch_out - roll_out - yaw_out);
+  fl.write(throttle + pitch_out + roll_out - yaw_out);
+  bl.write(throttle - pitch_out + roll_out + yaw_out);
+  fr.write(throttle + pitch_out - roll_out + yaw_out);
 }
 
 void runPids() {
@@ -291,7 +322,8 @@ void runPids() {
 
 int getValue(int pin, int min, int max) {
   int value = pulseIn(pin, HIGH);
-  value = map(value, 1000, 2000, min, max);
+  //Serial.println(value);
+  value = map(value, CONTROL_VALUE_MIN, CONTROL_VALUE_MAX, min, max);
   value = constrain(value, min, max);
   return value;
 }
@@ -323,7 +355,7 @@ void callibrate() {
   EEPROM.put(8, pitch_error);
   EEPROM.put(16, roll_error);
 
-  Serial.print("Callibration values: ");
+  Serial.print("Calibration values: ");
   Serial.print(yaw_error);
   Serial.print("\t");
   Serial.print(pitch_error);
