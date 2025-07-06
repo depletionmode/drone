@@ -1,3 +1,15 @@
+#include <Modem.h>
+#include <StringHelpers.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WiFiCommands.h>
+#include <WiFiFileSystem.h>
+#include <WiFiS3.h>
+#include <WiFiServer.h>
+#include <WiFiSSLClient.h>
+#include <WiFiTypes.h>
+#include <WiFiUdp.h>
+
 #include <Adafruit_BNO08x.h>
 #include <sh2_err.h>
 #include <sh2_hal.h>
@@ -13,6 +25,8 @@
 #include <EEPROM.h>
 #include <AutoPID.h>
 
+#include "secrets.h"
+
 #define SPI_PIN_CS  10
 #define SPI_PIN_INT 9
 #define SPI_PIN_RESET 8
@@ -22,7 +36,7 @@
 
 #define DEBUG
 
-//#define CALLIBRATE_ON_START
+#define CALLIBRATE_ON_START
 
 #define CONTROL_PIN_KILL          A0
 #define CONTROL_PIN_THROTTLE      A1
@@ -43,6 +57,9 @@
 
 #define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
 #define GYRO_REPORT_INTERVAL 5000
+
+int status = WL_IDLE_STATUS;
+WiFiServer server(80);
 
 Servo br; // back right blue
 Servo fl; // front left green
@@ -162,11 +179,18 @@ void setup() {
     Serial.print(ypr.roll - roll_error);
     Serial.print("\n");
 
+  #ifdef DEBUG
+    startWifi();
+  #endif
+
   Serial.println("Initialization complete.");
 }
 
 void loop() {
+  // TODO ditch dev code
   readGyro(&ypr, true);
+  return;
+
   int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
 
   if (kill < 1500) {
@@ -277,9 +301,10 @@ void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, boo
     float sqj = sq(qj);
     float sqk = sq(qk);
 
+    // NOTE: Orientation of the sensor on the drone defines the roll/pitch axis.
     ypr->yaw = atan2(2.0 * (qi * qj + qk * qr), (sqi - sqj - sqk + sqr));
-    ypr->pitch = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
-    ypr->roll = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
+    ypr->roll = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
+    ypr->pitch = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
 
     if (degrees) {
       ypr->yaw *= RAD_TO_DEG;
@@ -319,4 +344,34 @@ void readGyro(euler_t* ypr, bool adjustForError) {
     Serial.print("\n");
   #endif
   }
+}
+
+void startWifi() {
+  char ssid[] = WIFI_SSID;
+  char pass[] = WIFI_PASSWORD;
+
+  WiFi.config(IPAddress(192,168,1,190));
+
+  while (status != WL_CONNECTED) {
+    Serial.print("Attempting to connect to Network named: ");
+    Serial.println(WIFI_SSID);                   // print the network name (SSID);
+
+    status = WiFi.begin(ssid, pass);
+
+    delay(500);
+  }
+
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  long rssi = WiFi.RSSI();
+  Serial.print("signal strength (RSSI):");
+  Serial.print(rssi);
+  Serial.println(" dBm");
+
+  //server.begin();                           // start the web server on port 80
 }
