@@ -58,6 +58,8 @@
 #define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
 #define GYRO_REPORT_INTERVAL 5000
 
+#define IP_ADDRESS (IPAddress(192,168,1,190))
+
 int status = WL_IDLE_STATUS;
 WiFiServer server(80);
 
@@ -187,9 +189,12 @@ void setup() {
 }
 
 void loop() {
+#ifdef DEBUG
+    handleWebServer();
   // TODO ditch dev code
-  readGyro(&ypr, true);
+  //readGyro(&ypr, true);
   return;
+#endif
 
   int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
 
@@ -346,15 +351,16 @@ void readGyro(euler_t* ypr, bool adjustForError) {
   }
 }
 
+#ifdef DEBUG
 void startWifi() {
   char ssid[] = WIFI_SSID;
   char pass[] = WIFI_PASSWORD;
 
-  WiFi.config(IPAddress(192,168,1,190));
+  WiFi.config(IP_ADDRESS);
 
   while (status != WL_CONNECTED) {
     Serial.print("Attempting to connect to Network named: ");
-    Serial.println(WIFI_SSID);                   // print the network name (SSID);
+    Serial.println(WIFI_SSID);
 
     status = WiFi.begin(ssid, pass);
 
@@ -373,5 +379,93 @@ void startWifi() {
   Serial.print(rssi);
   Serial.println(" dBm");
 
-  //server.begin();                           // start the web server on port 80
+  server.begin();
 }
+
+void handleWebServer()
+{
+  WiFiClient client = server.available(); 
+  if (client) {
+    String request = "";
+
+    Serial.print("WEBSERVER: ");
+
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        if (c == '\n') {
+            client.println("HTTP/1.1 200 OK");
+            break;
+        } else if (c != '\r') {
+          request += c;
+        }
+      }
+    }
+
+    client.stop();
+
+    Serial.println(request);
+
+    String name;
+    double kp, ki, kd;
+
+    getPidValuesFromRequest(request, name, kp, ki, kd);
+
+    Serial.print("WEBSERVER: ");
+    Serial.print(name);
+    Serial.print("\t");
+    Serial.print(kp);
+    Serial.print("\t");
+    Serial.print(ki);
+    Serial.print("\t");
+    Serial.print(kd);
+    Serial.print("\n");
+
+    if (name == "yaw") {
+      pid_yaw.setGains(kp, ki, kd);
+    } else if (name == "pitch") {
+      pid_pitch.setGains(kp, ki, kd);
+    } else if (name == "roll") {
+      pid_roll.setGains(kp, ki, kd);
+    }
+
+    return;
+  }
+}
+
+void getPidValuesFromRequest(const String& request, String& name, double& kp, double& ki, double& kd) {
+  // Copilot wrote this code. Yuch.
+  kp = ki = kd = 0;
+  name = "";
+
+  // Find the first '/' and the '?' after it
+  int firstSlash = request.indexOf('/');
+  int question = request.indexOf('?', firstSlash);
+  if (firstSlash != -1) {
+    int nameEnd = (question != -1) ? question : request.indexOf(' ', firstSlash + 1);
+    if (nameEnd == -1) nameEnd = request.length();
+    name = request.substring(firstSlash + 1, nameEnd);
+  }
+
+  // Parse parameters after '?'
+  if (question != -1) {
+    int paramEnd = request.indexOf(' ', question);
+    if (paramEnd == -1) paramEnd = request.length();
+    String params = request.substring(question + 1, paramEnd);
+
+    int idx = 0;
+    while (idx < params.length()) {
+      int eq = params.indexOf('=', idx);
+      if (eq == -1) break;
+      String key = params.substring(idx, eq);
+      int amp = params.indexOf('&', eq + 1);
+      int end = (amp == -1) ? params.length() : amp;
+      String val = params.substring(eq + 1, end);
+      if (key == "kp") kp = val.toDouble();
+      else if (key == "ki") ki = val.toDouble();
+      else if (key == "kd") kd = val.toDouble();
+      idx = end + 1;
+    }
+  }
+}
+#endif
