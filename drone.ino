@@ -98,8 +98,8 @@ double pitch_sp;
 double roll_sp;
 
 AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 0, 0, 0);
-AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 0.9, 0, 13);
-AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0.9, 0, 13);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 1.5, 0, 3);
+AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0, 0, 0);
 
 struct euler_t {
   float yaw;
@@ -298,10 +298,10 @@ void loop() {
   // TODO For now disable yaw!!
   yaw_out = 0;
 
-  br.write(throttle - pitch_out - roll_out - yaw_out);
-  fl.write(throttle + pitch_out + roll_out - yaw_out);
-  bl.write(throttle - pitch_out + roll_out + yaw_out);
-  fr.write(throttle + pitch_out - roll_out + yaw_out);
+  br.write(limitValue(throttle - pitch_out - roll_out - yaw_out, 0, THROTTLE_MAX));
+  fl.write(limitValue(throttle + pitch_out + roll_out - yaw_out, 0, THROTTLE_MAX));
+  bl.write(limitValue(throttle - pitch_out + roll_out + yaw_out, 0, THROTTLE_MAX));
+  fr.write(limitValue(throttle + pitch_out - roll_out + yaw_out, 0, THROTTLE_MAX));
 }
 
 void runPids() {
@@ -325,6 +325,15 @@ int getValue(int pin, int min, int max) {
   //Serial.println(value);
   value = map(value, CONTROL_VALUE_MIN, CONTROL_VALUE_MAX, min, max);
   value = constrain(value, min, max);
+  return value;
+}
+
+int limitValue(int value, int min, int max) {
+  if (value < min) {
+    return min;
+  } else if (value > max) {
+    return max;
+  }
   return value;
 }
 
