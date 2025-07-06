@@ -48,7 +48,7 @@
 
 #define MOTOR_PIN_FR  2
 #define MOTOR_PIN_FL  3
-#define MOTOR_PIN_BR  4
+#define MOTOR_PIN_BR  5
 #define MOTOR_PIN_BL  4
 
 #define PID_UPDATE_INTERVAL 2  //ms (should be lower than the gyro report interval to avoid PID lag)
