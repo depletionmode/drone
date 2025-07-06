@@ -45,10 +45,10 @@
 #define CONTROL_PIN_YAW           A4
 #define CONTROL_PIN_CALLIBRATION  A5
 
-#define MOTOR_PIN_FR  3
-#define MOTOR_PIN_FL  4
-#define MOTOR_PIN_BR  6
-#define MOTOR_PIN_BL  7
+#define MOTOR_PIN_FR  2
+#define MOTOR_PIN_FL  3
+#define MOTOR_PIN_BR  5
+#define MOTOR_PIN_BL  4
 
 #define PID_MIN -20
 #define PID_MAX 20
