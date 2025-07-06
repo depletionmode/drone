@@ -35,6 +35,7 @@
 //#define SPI_PIN_SCK    13
 
 #define DEBUG
+//#define DEBUG_GYRO_LOOP
 
 #define CALLIBRATE_ON_START
 
@@ -45,18 +46,19 @@
 #define CONTROL_PIN_YAW           A4
 #define CONTROL_PIN_CALLIBRATION  A5
 
-#define MOTOR_PIN_FR  3
-#define MOTOR_PIN_FL  4
-#define MOTOR_PIN_BR  6
-#define MOTOR_PIN_BL  7
+#define MOTOR_PIN_FR  2
+#define MOTOR_PIN_FL  3
+#define MOTOR_PIN_BR  4
+#define MOTOR_PIN_BL  4
 
+#define PID_UPDATE_INTERVAL 2  //ms (should be lower than the gyro report interval to avoid PID lag)
 #define PID_MIN -20
 #define PID_MAX 20
 #define THROTTLE_MAX (180-PID_MAX)
 #define DEGREES_RANGE_MAX 30
 
 #define GYRO_REPORT_TYPE SH2_ARVR_STABILIZED_RV
-#define GYRO_REPORT_INTERVAL 5000
+#define GYRO_REPORT_INTERVAL 5000 //us
 
 #define IP_ADDRESS (IPAddress(192,168,1,190))
 
@@ -92,7 +94,7 @@ double pitch_sp;
 double roll_sp;
 
 AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 5, 3, 3);
-AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 5, 3, 3);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 3, 1, 0.5);
 AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 5, 3, 3);
 
 struct euler_t {
@@ -138,9 +140,9 @@ void setup() {
 
   Serial.println("Starting initialization of drone...");
 
-  pid_yaw.setTimeStep(1);
-  pid_pitch.setTimeStep(1);
-  pid_roll.setTimeStep(1);
+  pid_yaw.setTimeStep(PID_UPDATE_INTERVAL);
+  pid_pitch.setTimeStep(PID_UPDATE_INTERVAL);
+  pid_roll.setTimeStep(PID_UPDATE_INTERVAL);
 
   if (!bno08x.begin_SPI(SPI_PIN_CS, SPI_PIN_INT)) {
     Serial.println("GYRO: Failed to find BNO08x chip");
@@ -189,11 +191,28 @@ void setup() {
 }
 
 void loop() {
-#ifdef DEBUG
-    handleWebServer();
-  // TODO ditch dev code
-  //readGyro(&ypr, true);
+#ifdef DEBUG_GYRO_LOOP
+  static int i = 0;
+  Serial.print("Loop iteration: ");
+  Serial.println(++i);
+
+  readGyro(&ypr, true);
+
+  yaw_in = ypr.yaw;
+  pitch_in = ypr.pitch;
+  roll_in = ypr.roll;
+
+  yaw_sp = 0;
+  pitch_sp = 0;
+  roll_sp = 0;
+
+  runPids();
+
   return;
+#endif
+
+#ifdef DEBUG
+  handleWebServer();
 #endif
 
   int kill = pulseIn(CONTROL_PIN_KILL, HIGH);
@@ -243,9 +262,7 @@ void loop() {
   pitch_sp = pitch;
   roll_sp = roll;
 
-  pid_yaw.run();
-  pid_pitch.run();
-  pid_roll.run();
+  runPids();
 
   // TODO For now disable yaw!!
   yaw_out = 0;
@@ -254,6 +271,22 @@ void loop() {
   fl.write(throttle + pitch_out + roll_out + yaw_out);
   bl.write(throttle - pitch_out + roll_out - yaw_out);
   fr.write(throttle + pitch_out - roll_out - yaw_out);
+}
+
+void runPids() {
+  pid_yaw.run();
+  pid_pitch.run();
+  pid_roll.run();
+
+#ifdef DEBUG
+  Serial.print("PID: ");
+  Serial.print(yaw_out);
+  Serial.print("\t");
+  Serial.print(pitch_out);
+  Serial.print("\t");
+  Serial.print(roll_out);
+  Serial.print("\n");
+#endif
 }
 
 int getValue(int pin, int min, int max) {
@@ -339,13 +372,13 @@ void readGyro(euler_t* ypr, bool adjustForError) {
 
   #ifdef DEBUG
     Serial.print("GYRO: ");
-    Serial.print(adjustForError ? "Adjusted" : "Raw");
-    Serial.print("\t");
     Serial.print(ypr->yaw);
     Serial.print("\t");
     Serial.print(ypr->pitch);
     Serial.print("\t");
     Serial.print(ypr->roll);
+    Serial.print("\t");
+    Serial.print(adjustForError ? "Adjusted" : "Raw");
     Serial.print("\n");
   #endif
   }
