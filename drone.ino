@@ -103,8 +103,10 @@ double pitch_sp;
 double roll_sp;
 
 AutoPID pid_yaw(&yaw_in, &yaw_sp, &yaw_out, PID_MIN, PID_MAX, 0, 0, 0);
-AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 30, 0.003, 0.03);
-AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0, 0, 0);
+AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 1.5, 0.015, 0.15);
+AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 2.5, 0.03, 0.3);
+//AutoPID pid_pitch(&pitch_in, &pitch_sp, &pitch_out, PID_MIN, PID_MAX, 0, 0.00, 0);
+//AutoPID pid_roll(&roll_in, &roll_sp, &roll_out, PID_MIN, PID_MAX, 0, 0, 0);
 
 struct euler_t {
   float yaw;
@@ -201,15 +203,15 @@ void setup() {
 
 void loop() {
 #ifdef DEBUG
-  unsigned long currentMicros = micros();
-  if (currentMicros - lastMicros >= 1000000) {
-    Serial.print("Loop frequency: ");
-    Serial.print(loopCount);
-    Serial.println(" Hz");
+  //unsigned long currentMicros = micros();
+  //if (currentMicros - lastMicros >= 1000000) {
+  //  Serial.print("Loop frequency: ");
+  //  Serial.print(loopCount);
+  //  Serial.println(" Hz");
 
-    loopCount = 0;
-    lastMicros = currentMicros;
-  }
+  //  loopCount = 0;
+  //  lastMicros = currentMicros;
+  //}
   //handleWebServer();
 #endif
 
@@ -252,17 +254,17 @@ void loop() {
     roll = getValue(CONTROL_PIN_ROLL, true, -DEGREES_RANGE_MAX, DEGREES_RANGE_MAX);
 
 #ifdef DEBUG
-    Serial.print("Control values: ");
-    Serial.print(kill);
-    Serial.print("\t");
-    Serial.print(throttle);
-    Serial.print("\t");
-    Serial.print(pitch);
-    Serial.print("\t");
-    Serial.print(yaw);
-    Serial.print("\t");
-    Serial.print(roll);
-    Serial.print("\n");
+    //Serial.print("Control values: ");
+    //Serial.print(kill);
+    //Serial.print("\t");
+    //Serial.print(throttle);
+    //Serial.print("\t");
+    //Serial.print(pitch);
+    //Serial.print("\t");
+    //Serial.print(yaw);
+    //Serial.print("\t");
+    //Serial.print(roll);
+    //Serial.print("\n");
 #endif
   }
 
